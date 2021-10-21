@@ -31,20 +31,24 @@ static bool is_radio_killed(void) {
 	return cache_get_radio_revive_timestamp() >= get_current_timestamp();
 }
 
+// 
 static void read_radio_temp_mode(void) {
-	// power on radio initially
+	// power on radio initially: first arg enables radio
 	setRadioState(true, false);
 	// set command mode to allow sending commands
 	vTaskDelay(SET_CMD_MODE_WAIT_BEFORE_MS / portTICK_PERIOD_MS);
+	//enable transmit and receive buffers
 	setTXEnable(true);
 	setRXEnable(true);
-	set_command_mode(false); // don't delay, we'll take care of it
+	set_command_mode(false); // don't delay, we'll take care of it 
 	vTaskDelay(SET_CMD_MODE_WAIT_AFTER_MS / portTICK_PERIOD_MS);
-
 	clear_USART_rx_buffer();
+	// put temperature in radio_send_buffer
 	XDL_prepare_get_temp();	
+	// USART (Universal synchronous and asynchronous receiver-transmitter) is a serial communication protocol
 	usart_send_string(radio_send_buffer);
 	
+	// ????
 	vTaskDelay(TEMP_RESPONSE_TIME_MS / portTICK_PERIOD_MS);
 	if (check_checksum(radio_receive_buffer+1, 3, radio_receive_buffer[4])) {
 		radio_temp_cached = (radio_receive_buffer[2] << 8) | radio_receive_buffer[3];
@@ -52,6 +56,7 @@ static void read_radio_temp_mode(void) {
 	} else {
 		log_error(ELOC_RADIO_TEMP, ECODE_TIMEOUT, false);
 	}
+	// disable buffers
 	setRXEnable(false);
 	setTXEnable(false);
 }
@@ -102,6 +107,7 @@ static void revive_radio() {
 }
 
 // listens for RX and handles uplink commands for up to RX_READY_PERIOD_MS
+// called to enable rx mode on radio and wait for any incoming transmissions
 static void handle_uplinks(void) {
 	// get ready for buffer input and enable RX mode only
 	clear_USART_rx_buffer();
@@ -121,14 +127,16 @@ static void handle_uplinks(void) {
 	while (processing_deadline - (RX_READY_PERIOD_MS / portTICK_PERIOD_MS) <= xTaskGetTickCount() 
 			&& xTaskGetTickCount() < processing_deadline) {
 		// try to receive command from queue, waiting the maximum time we can before the processing deadline
-		if (xQueueReceive(rx_command_queue, &rx_command, processing_deadline - xTaskGetTickCount())) {
+		if (xQueueReceive(rx_command_queue, &rx_command, processing_deadline - xTaskGetTickCount())) { //xQueueReceive: Receive an item from a queue. The item is received by copy 
 			bool is_killed = is_radio_killed();
+			//rx_command is written from xQueueReceive (pops command from command queue)
 			switch (rx_command) {
 				case CMD_ECHO:
 					// just an echo
 					if (!is_killed)
 						for (int i = 0; i < 3; i++) {
 							vTaskDelay(PRE_REPLY_DELAY_MS  / portTICK_PERIOD_MS);
+							// transmits the buffer of given size over the radio USART, (2nd arg) over the radio USART,
 							transmit_buf_wait((uint8_t*) echo_response_buf, CMD_RESPONSE_SIZE);
 						}
 					break;
@@ -198,7 +206,7 @@ static void handle_uplinks(void) {
 					break;
 			}
 		}
-		// keep trying if nothing received
+		// keep trying if nothing (no commands) received
 	}
 }
 
